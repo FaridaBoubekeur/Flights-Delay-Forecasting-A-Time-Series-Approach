@@ -1,0 +1,380 @@
+---
+title: 'Flights Delay Forecasting: A Time Series Approach'
+output:
+  html_document:
+    df_print: paged
+---
+
+# Abstract:
+
+This project aims to analyze flight delays and develop a predictive model for forecasting future delays. Utilizing data sourced from Kaggle's Airline Delay Analysis dataset, our study delves into the complexities of flight delay patterns. Employing time series analysis techniques, we systematically examine the dataset to identify candidate models for forecasting. Through rigorous evaluation, we select the most suitable model to address the forecasting challenge. This abstract summarizes our methodology and findings in the pursuit of understanding and predicting flight delays, thereby contributing to enhanced efficiency and decision-making within the aviation industry.
+
+# Introduction:
+
+Forecasting airline flight delays is vital for both travelers and airlines, enabling better preparation and resource management. By understanding historical delay data, we can develop predictive models to anticipate and minimize disruptions in future flights. Thus, our effort to forecast airline flight delays is crucial for improving the efficiency and reliability of air travel.
+
+The dataset titled "Airline Delay Analysis" is the focal point of our study, encompassing sub-datasets spanning from 2009 to 2019, each representing a distinct year. Within these sub-datasets, we find comprehensive data regarding various flights each day, throughout the year. For simplicity, our analysis focuses on the years from 2013 to 2015, where we have extracted the average delay of flights grouped by days, facilitating clearer insights into the patterns of delay occurrences.
+
+# Model Specification:
+
+## Data Preparation:
+Before merging our sub-datasets, here are the primary steps we have undertaken:
+1- Since we have gotten a rich dataset (around 6m for each year), we started by removing the instances with null values.
+2- Given multiple instances of flights for each day, we calculated the average delay to have only one instance for each day for clarity.
+3- We combined the three datasets (2013-2014-2015), and kept only the columns ‘FL_DATE’ and ‘avg_delay” for our analysis since they are our main focus.
+4- Sub-dataset of 2016 is left for testing the model.
+
+
+## Data Analysis:
+
+```{r}
+#import Libraries
+library(dplyr)
+library(ggplot2)
+library(xts)
+library(forecast)
+library(MASS)
+library(tseries)
+library(urca)
+library(stats)
+```
+
+
+```{r}
+# training data
+data1 <- read.csv("2013.csv")
+data2 <- read.csv("2014.csv")
+data3 <- read.csv("2015.csv")
+
+# testing data
+data4<- read.csv("2016.csv")
+
+```
+
+
+### Data preprocessing:
+In order to have consistent data, we first need to handle null values (remove them).
+
+```{r}
+# remove null values
+data1 <- data1[!is.na(data1$DEP_DELAY), ]
+data2 <- data2[!is.na(data2$DEP_DELAY), ]
+data3 <- data3[!is.na(data3$DEP_DELAY), ]
+
+data4 <- data4[!is.na(data4$DEP_DELAY), ]
+```
+
+
+```{r}
+# Aggregate the data by date 
+data1_avg <- data1 %>%
+  group_by(FL_DATE) %>%
+  summarise(avg_delay = mean(DEP_DELAY))
+
+data2_avg <- data2 %>%
+  group_by(FL_DATE) %>%
+  summarise(avg_delay = mean(DEP_DELAY))
+
+data3_avg <- data3 %>%
+  group_by(FL_DATE) %>%
+  summarise(avg_delay = mean(DEP_DELAY))
+
+data_2016 <- data4 %>%
+  group_by(FL_DATE) %>%
+  summarise(avg_delay = mean(DEP_DELAY))
+
+```
+
+```{r}
+# Combine the datasets row-wise
+data <- rbind(data1_avg, data2_avg, data3_avg)
+```
+
+
+```{r}
+data$FL_DATE <- as.Date(data$FL_DATE)
+
+summary(data)
+
+# Visualization
+ggplot(data, aes(x = FL_DATE, y = avg_delay)) +
+  geom_line(color = "blue", group = 1) +  
+  geom_point(color = "blue") +
+  labs(title = "Average Arrival Delay Time",
+       x = "Date",
+       y = "Average Delay Time (minutes)")
+```
+
+From the summary and the plot of our data, we can observe that our data are stationary, with a mean delay of almost 10 minutes. This low mean value is attributed to the presence of negative delay values, which represent early arrivals. Our data exhibit no obvious trend; however, seasonal patterns may be detected annually. This can be interpreted by observing the times of holidays throughout the year, which are the primary reasons for the delays. As we observe, delays are higher in the middle and at the end of each year (holiday seasons). However, the unequal frequency of delays suggests that the variance is not stabilized.
+
+```{r}
+# Create an time series objects for the data frames with date-time index
+
+data$FL_DATE <- as.Date(data$FL_DATE)
+data_2016$FL_DATE <- as.Date(data_2016$FL_DATE)
+
+ts_data <- ts(data$avg_delay, start = min(data$FL_DATE),  frequency = 365)
+
+```
+
+### Stationarity, variance, seasonality, and residuals check:
+
+#### Variance:
+
+First we start by box-cox test to estimate the lambda:
+
+```{r}
+# we add a constant to make the data positive for the box-cox function
+min_value <- min(ts_data)
+
+if (min_value <= 0) {
+  ts_data <- ts_data - min_value + 1
+}
+boxcox_results <- boxcox(ts_data ~ 1, lambda = seq(-2, 2, 0.1))
+optimal_lambda <- boxcox_results$x[which.max(boxcox_results$y)]
+print(optimal_lambda)
+```
+
+The lambda suggested by the boxcos function is: 0.1818182 which is far from 1, hence we suggest that we need transformation of the variance. Since the value is near zero and it is a positive one, we would go with transformation of the for log(x); however the presence of some negative values in the dataset leaded to bad results, hence we applied the alternative transformation.
+
+#### Variance Transformation:
+```{r}
+# Apply the Box-Cox transformation using the optimal lambda
+ts_data <- (ts_data^optimal_lambda - 1) / optimal_lambda
+```
+
+Now we can go ahead with further analysis
+
+#### Decomposition components
+
+```{r}
+# Decompose the time series data
+decomposed_ts <- decompose(ts_data)
+
+decomposition <- stl(ts_data, s.window="periodic")
+
+# Access the decomposed components
+trend <- decomposition$time.series[, "trend"]
+seasonal <- decomposition$time.series[, "seasonal"]
+residual <- decomposition$time.series[, "remainder"]
+
+# Plot the original time series
+plot(ts_data, main="Original Time Series", xlab="Time", ylab="Value", col="blue")
+
+# Plot the trend component
+plot(decomposed_ts$trend, main="Trend Component", xlab="Time", ylab="Value", col="red")
+
+# Plot the seasonal component
+plot(decomposed_ts$seasonal, main="Seasonal Component", xlab="Time", ylab="Value", col="green")
+
+# Plot the residual component (noise)
+plot(decomposed_ts$random, main="Residual Component", xlab="Time", ylab="Value", col="orange")
+```
+
+###### Interpretation:
+Even though we cannot detect any obvious trend from the trend component, we cannot say that there will not be in the future, especially due to the limited size of our data; we can assume that if we took a larger dataset, we may notice some trend patterns.
+
+From the seasonal component, it is evident that a clear yearly pattern emerges, displaying a sinusoidal pattern.
+
+The residuals seem to be oscillating the mean (form of a white noise).
+
+Now we go further with tests:
+
+#### Trend test
+```{r}
+# Trend line fitting
+trend <- lm(ts_data ~ time(ts_data))
+plot(ts_data, main="Time Series Data with Trend Line", xlab="Time", ylab="Value", type="l", col="blue")
+abline(trend, col="red")
+```
+
+As we can observe, the linear model does not capture the data very well which is due to the almost non-existing trend in the data.
+
+#### Stationarity check:
+To strongly confirm our hypothesis, we apply the stationarity tests (ADF and KPSS)
+```{r}
+# Augmented Dickey-Fuller (ADF) test
+adf_test <- adf.test(ts_data)
+print(adf_test)
+# KPSS test for stationarity
+kpss_test <- ur.kpss(ts_data)
+print(kpss_test)
+```
+
+###### Interpretation:
+Augmented Dickey-Fuller Test:
+p-value = 0.01 < 0.05 -> we reject null hypothesis, hence: we take the alternative hypothesis: stationary
+
+
+KPSS Test:
+In this case, we are interested in a p-value larger than 0.05. This is because of how the hypotheses are defined. 
+The KPSS test statistic value of 0.3179 suggests that it falls above the critical value for the test.Given that the test statistic is bigger than the critical value, we fail to reject the null hypothesis. Therefore, based on the KPSS test, the time series data appears to be stationary or stationary around a stochastic trend.
+
+### ACF and PACF plots analysis
+```{r}
+# Autocorrelation plot
+acf(ts_data)
+
+# Partial autocorrelation plot
+pacf(ts_data)
+```
+
+W can clearly observe the effect of the seasonality of our data in the ACF and PACF plots.
+In our analysis, the ACF plot indicates a departure from the typical pattern associated with Moving Averages models, instead pointing strongly towards an Auto Regression model. The gradual decay of successive lags, characteristic of AR models, suggests dependency among previous lags. To pinpoint significant lags, we should delve deeper into the PACF plot.
+Lags 1,3,7 .. are significant so we can consider this for AR(1) and AR(3) models.
+From the PACF, we can notice the spikes at lag 2,5,6..
+
+### Conclusion about condidate models:
+
+Since we got no trend, we exclude the ARIMA(p,1,q) model (as well as for SARIMA) since we don't need any differencing to achieve stationarity. Also, any linear models are eliminated as well!
+
+From the seasonality component plot, we can see that there is a kind of periodic seasonality each year, a cosine model would be a candidate at this level, but since we observed the presence of the SARIMA model we will start with it (we test for ARIMA).
+
+##### Note
+As a draft, we started first by fitting a cosine model and we got some good results. However, after comparing with the ARIMA model, it seemed that this latter is better.
+
+### Model Parameter estimation
+In order to estimate the parameters p d q, we should analyse our data.
+Since we achieved stationarity without differencing (already stationary) then we know that d=0. Now it remains to find the values of p and q.
+
+To estimate these parameters, we will go with three methods: 
+1- ACF/PACF plots analysis
+2- AutoArima function.
+We already analysed the plots so we directly examine the autoarima function.
+
+#### AutoArima function:
+
+```{r}
+# Fit the model
+arima_model <- auto.arima(ts_data)
+
+summary(arima_model)
+
+plot(arima_model)
+
+```
+
+The ARIMA model suggested is labeled as ARIMA(1,0,2), meaning it includes an autoregressive (AR) part of order 1 and a moving average (MA) part of order 2.
+
+The results we obtained show an AIC (Akaike Information Criterion) of 2190.25 and a BIC (Bayesian Information Criterion) of 2215.24. These values suggest that the model fits the data well. However, to ensure the robustness of our model, we compared it against other potential orders but it seemed to be the best fit (among the candidates).
+
+# Fitting and Diagnostics:
+
+Note that we could not demonstrate the analysis of all our candidates due to the length of the notebook, so we went directly with the one we found to be the best fit.
+
+## ARIMA model fitting:
+After estimating the parameters to be (1,0,2), we will now fit the model in order to make residual analysis to have an initial evaluation.
+
+```{r}
+# Fit ARIMA model
+arima_model <- arima(ts_data, order=c(1,0,2), seasonal=list(order=c(0,0,0), period=365))
+
+# Summary of the model
+summary(arima_model)
+
+# Diagnostic plots
+plot(arima_model)
+```
+
+The ARIMA(1,0,2) model demonstrates a satisfactory fit to the training data, as indicated by the relatively low AIC value of 2190.25. The estimated coefficients suggest a moderate autoregressive effect (AR(1)) and two significant negative moving average terms (MA(1) and MA(2)).
+
+## Residual Analysis
+
+### Residual plot and summary
+```{r}
+# Initial analysis
+summary(arima_model$residuals)
+plot(arima_model$residuals)
+```
+The residuals summary and plot indicate that the model adequately captures the central tendency of the data, as the residuals oscillate around the mean.
+
+### Residual ACF and PACF
+
+```{r}
+acf(residuals(arima_model))
+pacf(residuals(arima_model))
+```
+
+Althought almost of the lines are between the boundary lines, the presence of significant spikes outside the confidence interval in the ACF plot indicates that there may be an autocorrelation present in the residuals, suggesting that the model may not adequately capture all the temporal dependencies in the data.
+
+
+### Residuals Normality:
+
+#### Histogram and QQplots
+```{r}
+hist(residuals(arima_model), main = "Histogram of Residuals", xlab = "Residuals", ylab = "Frequency", col = "cyan")
+qqnorm(residuals(arima_model))
+qqline(residuals(arima_model))
+
+```
+
+From the QQ-Plot and the Histogram of the residuals we can see clearly that the residuals are normally distributed. But to confirm, we go for the tests:
+
+#### Shapiro-Wilk normality test
+
+```{r}
+shapiro.test(residuals(arima_model))
+```
+- The test statistic (W) is 0.9974.
+- The associated p-value is 0.07512.
+
+With a p-value of 0.07512, which is greater than the conventional significance level of 0.05, there is no significant evidence to reject the null hypothesis. Therefore, based on this test, we can conclude that the residuals of the sarima model approximately follow a normal distribution.
+
+#### Ljung-Box test
+
+```{r}
+ljung_box_test <- Box.test(residuals(arima_model), lag = 2, type = "Ljung-Box")
+print(ljung_box_test)
+```
+The p-value of 0.993 indicates that there is no significant evidence to reject the null hypothesis of independence. Therefore, the residuals appear to be independent, which is a desirable property for an ARIMA model.
+
+### Conclusion
+From the above analysis we can ensure the normality and independece of the residuals to a certain level, which indicates that the model has effectively captured the underlying patterns and randomness in the data.
+
+# Forecasting
+
+In order to forecast, we previously mentioned that we will work with the 2016 data as our test data to evaluate the forecasting result. Hence, we will start by forecasting the 366 next days (since 2016 appears to have 366 days from its dataset). Then we will compare the forecasted data to the true delay data we have.
+
+We previously made variance transformation to our data, hence we need to detransform them in order to have consistent results.
+
+```{r}
+# Perform the forecast
+forecast_result <- forecast(arima_model, h = 366)
+
+# Generate a sequence of dates for the year 2016
+dates_2016 <- seq(as.Date("2016-01-01"), by = "day", length.out = 366)
+
+# Combine dates with forecasted values
+forecast_data <- data.frame(FL_DATE = dates_2016, avg_delay = forecast_result$mean)
+
+detransformed_forecast <- forecast_data
+detransformed_forecast$avg_delay <- ((forecast_data$avg_delay * optimal_lambda) + 1)^(1 / optimal_lambda)
+```
+
+```{r}
+MAE <- mean(abs( data_2016$avg_delay - detransformed_forecast$avg_delay))
+MSE <- mean((data_2016$avg_delay - detransformed_forecast$avg_delay)^2)
+RMSE <- sqrt(MSE)
+MAPE <- mean(abs((data_2016$avg_delay - detransformed_forecast$avg_delay)) / data_2016$avg_delay)*100
+print(MAE)
+print(MSE)
+print(RMSE)
+print(MAPE)
+
+```
+
+##### Interpretation:
+From what we have gotten: the forecasted values deviate from the actual values by approximately 4.91 units.
+And from the MAPE Metric: on average, the absolute percentage difference between the forecasted values and the actual values is approximately 22.67%.
+
+We can see that the model does capture some patterns well especially at the beginning, however, it fails to capture more complex patterns.
+
+# Discussion
+To sum up the work we have done, basically we started by having first insights into our data and observed any obvious patterns for the average flights delay. A yearly seasonal pattern was captured and this is due to the same possible causes of the delays over the same periods over the year (holidays for example).
+After concise analysis, we made assumptions about several candidate models, such as cosine , AR(1),AR(2) and ARIMA(1,0,2), and then we picked the latter to fit. The residual analysis of the model resulted in good results, however the forecasted data did not seem to capture complex pattern, although it captured some of them which resulted in a 22.67% difference between the real value of delays and estimated ones.
+
+### Main problems encountered during the analysis
+Basically, understanding the flow of the work, and how to make correct interpretations was the most challenging part. And since we worked with seasonal data, we had some doubts whether to tackle SARIMA model or go with ARIMA. Also, estimating the orders of the arima model visually was hard, especially with the ambiguous plots we have gotten.
+
+# References:
+Data set from: <https://www.kaggle.com/datasets/sherrytp/airline-delay-analysis>
