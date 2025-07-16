@@ -11,5 +11,5 @@ Forecast evaluation and visualization
 
 HTML report generation for interactive presentation of results
 
-#📍 Developed by:
+# 📍 Developed by:
 Farida Boubekeur at ENSIA (École Nationale Supérieure d'Intelligence Artificielle)
